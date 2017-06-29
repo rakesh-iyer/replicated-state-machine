@@ -6,7 +6,7 @@ class RSM {
             return;
         }
 
-        try { 
+        try {
             int port;
             int [] peerPorts = new int[2];
             boolean stopped = false;
