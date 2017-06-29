@@ -1,5 +1,5 @@
 class ReplicaCommand extends Command {
-    String getType() {
-        return "REPLICA_COMMAND";
+    ReplicaCommand() {
+        setType("REPLICA_COMMAND");
     }
 }

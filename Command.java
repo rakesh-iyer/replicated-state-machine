@@ -1,7 +1,12 @@
-class Command {
+class Command extends Message {
     String id;
     long timeStamp;
-    String data;
+
+    void copy(Command c) {
+        c.setId(id);
+        c.setTimeStamp(timeStamp);
+        c.setData(data);
+    }
 
     String getId() {
         return id;
@@ -9,10 +14,6 @@ class Command {
 
     long getTimeStamp() {
         return timeStamp;
-    }
-
-    String getData() {
-        return data;
     }
 
     void setId(String id) {
@@ -23,7 +24,7 @@ class Command {
         this.timeStamp = timeStamp;
     }
 
-    void setData(String data) {
-        this.data = data;
+    public String toString() {
+        return super.toString() + " id:" + id + " timeStamp:" + timeStamp;
     }
 }
