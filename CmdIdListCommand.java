@@ -1,12 +1,12 @@
 import java.util.*;
 
-class CmdlistCommand extends Command {
+class CmdIdListCommand extends Command {
     long startTimeStamp;
     long endTimeStamp;
-    List<Command> commandList;
+    List<String> cmdIdList;
 
-    CmdlistCommand() {
-        setType("CMDLIST_COMMAND");
+    CmdIdListCommand() {
+        setType("CMDIDLIST_COMMAND");
     }
 
     long getStartTimeStamp() {
@@ -22,6 +22,14 @@ class CmdlistCommand extends Command {
     }
 
     void setEndTimeStamp(long endTimeStamp) {
-        this.endTimeStamp = endTimeStamp;   
+        this.endTimeStamp = endTimeStamp;
     }
-} 
+
+    List<String> getCmdIdList() {
+        return cmdIdList;
+    }
+
+    void setCmdIdList(List<String> cmdIdList) {
+        this.cmdIdList = cmdIdList;
+    }
+}

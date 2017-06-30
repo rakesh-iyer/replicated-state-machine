@@ -6,12 +6,15 @@ class ReplicatingServer implements Runnable {
     NetworkParameterBounds bounds = new NetworkParameterBounds();
     MessageReceiver messageReceiver;
     List<Command> receivedCommands = new ArrayList<>();
-    List<Command> acceptedCommands = new ArrayList<>();
     List<Command> executedCommands = new ArrayList<>();
+    Map<String, Command> acceptedCommands = new HashMap<>();
+    long acceptedCommandTimeStamp;
+    long sentCmdIdListTimeStamp;
     boolean stopThread;
     int port;
     int [] peerPorts;
     Map<Integer, Long> voteMap = new HashMap<>();
+    Map<Integer, Long> cmdListMap = new HashMap<>();
     boolean doRecovery;
 
     ReplicatingServer(int port, int[] peerPorts, boolean doRecovery) {
@@ -22,6 +25,7 @@ class ReplicatingServer implements Runnable {
         // initialize the vote map.
         for (int peerPort : peerPorts) {
             voteMap.put(peerPort, 0L);
+            cmdListMap.put(peerPort, 0L);
         }
 
         messageReceiver = new MessageReceiver(commandQueue, port);
@@ -65,6 +69,40 @@ class ReplicatingServer implements Runnable {
         broadcast(vc);
     }
 
+    void sendCmdIdListCommand() {
+        CmdIdListCommand cilc = new CmdIdListCommand();
+
+        long startTimeStamp = sentCmdIdListTimeStamp + 1;
+        long endTimeStamp = getCurrentTimeStamp() - 2 * bounds.getLinkDelay();
+
+        List<Command> cmdList = getAcceptedCommandList(startTimeStamp, endTimeStamp);
+        List<String> cmdIdList = new ArrayList<>();
+        for (Command c : cmdList) {
+            cmdIdList.add(c.getId());
+        }
+
+        cilc.setStartTimeStamp(sentCmdIdListTimeStamp + 1);
+        cilc.setEndTimeStamp(getCurrentTimeStamp() - 2 * bounds.getLinkDelay());
+        cilc.setCmdIdList(cmdIdList);
+
+        broadcast(cilc);
+    }
+
+    List<Command> getAcceptedCommandList(long startTimeStamp, long endTimeStamp) {
+        List<Command> cmdList = new ArrayList<>();
+
+        // no need to optimize on this for now as this will be a rare call.
+        // ideally organize accepted command in a sorted ds that can be searched for key or ranges.
+        for (Command c : acceptedCommands.values()) {
+            if (c.getTimeStamp() < startTimeStamp || c.getTimeStamp() > endTimeStamp) {
+                continue;
+            }
+            cmdList.add(c);
+        }
+
+        return cmdList;
+    }
+
     void process() {
         try {
             while (!stopThread) {
@@ -101,13 +139,13 @@ class ReplicatingServer implements Runnable {
 
                     rc.copy(ac);
 
-                    acceptedCommands.add(ac);
+                    acceptedCommands.put(ac.getId(), ac);
                     broadcast(ac);
                 } else if (c.getType().equals("ACCEPT_COMMAND")) {
                     AcceptCommand ac = (AcceptCommand)c;
 
                     // add command to accepted commands list.
-                    acceptedCommands.add(ac);
+                    acceptedCommands.put(ac.getId(), ac);
                 } else if (c.getType().equals("VOTE_COMMAND")) {
                     // update vote map.
                     VoteCommand vc = (VoteCommand)c;
@@ -118,8 +156,55 @@ class ReplicatingServer implements Runnable {
                     voteMap.put(port, timeStamp);
 
                     // find the latest timestamp for which commands are accepted and execute all commands until that.
-                } else if (c.getType().equals("CMDLIST_COMMAND")) {
+                } else if (c.getType().equals("CMDIDLIST_COMMAND")) {
+                    CmdIdListCommand cilc = (CmdIdListCommand)c;
+                    boolean fetchCommands = true;
+
+                    int port = cilc.getSenderPort();
+                    long startTimeStamp = cilc.getStartTimeStamp();
+                    long endTimeStamp = cilc.getEndTimeStamp();
+
                     // detect if there is a gap in the intervals of knowledge and ask for the commands in between.
+                    if (cmdListMap.get(port) == startTimeStamp-1) {
+                        // make sure you have all the cmdids
+                        for (String cmdId : cilc.getCmdIdList()) {
+                            if (acceptedCommands.get(cmdId) == null) {
+                                break;
+                            }
+                        }
+
+                        fetchCommands = false;
+                    }
+
+                    if (fetchCommands) {
+                        CmdListRequestCommand clrc = new CmdListRequestCommand();
+
+                        clrc.setStartTimeStamp(acceptedCommandTimeStamp+1); // time of last known update of this.
+                        broadcast(clrc);
+                    } else {
+                        acceptedCommandTimeStamp = endTimeStamp;
+                    }
+                } else if (c.getType().equals("CMDLISTREQUEST_COMMAND")) {
+                    CmdListRequestCommand clrc = (CmdListRequestCommand) c;
+                    long startTimeStamp = clrc.getStartTimeStamp();
+                    // what is the most recent time for which you can send commands.
+                    long endTimeStamp = getCurrentTimeStamp() - 2 * bounds.getLinkDelay();
+
+                    List<Command> cmdList = getAcceptedCommandList(startTimeStamp, endTimeStamp);
+
+                    CmdListCommand clc = new CmdListCommand();
+
+                    clc.setCmdList(cmdList);
+                    clc.setStartTimeStamp(startTimeStamp);
+                    clc.setEndTimeStamp(endTimeStamp);
+
+                    broadcast(clc);
+                } else if (c.getType().equals("CMDLIST_COMMAND")) {
+                    CmdListCommand clc = (CmdListCommand) c;
+
+                    for (Command listCmd : clc.getCmdList()) {
+                        acceptedCommands.put(listCmd.getId(), listCmd);
+                    }
                 } else {
                     System.out.println("Unknown Command " + c);
                 }
