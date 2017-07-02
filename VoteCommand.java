@@ -14,4 +14,8 @@ class VoteCommand extends Command {
     VoteCommand() {
         setType("VOTE_COMMAND");
     }
+
+    public String toString() {
+        return super.toString() + " voteTimeStamp - " + voteTimeStamp;
+    }
 }

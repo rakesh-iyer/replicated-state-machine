@@ -14,4 +14,8 @@ class CmdListRequestCommand extends Command {
     void setStartTimeStamp(long startTimeStamp) {
         this.startTimeStamp = startTimeStamp;
     }
+
+    public String toString() {
+        return super.toString() + " startTimeStamp - " + startTimeStamp;
+    }
 }

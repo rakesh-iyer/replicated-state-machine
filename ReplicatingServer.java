@@ -8,14 +8,16 @@ class ReplicatingServer implements Runnable {
     List<Command> receivedCommands = new ArrayList<>();
     List<Command> executedCommands = new ArrayList<>();
     Map<String, Command> acceptedCommands = new HashMap<>();
-    long acceptedCommandTimeStamp;
-    long sentCmdIdListTimeStamp;
+    long acceptedCmdTimeStamp;
+    long executedCmdTimeStamp;
+    long sentCmdListTimeStamp;
+    long sentVoteTimeStamp;
     boolean stopThread;
     int port;
     int [] peerPorts;
     Map<Integer, Long> voteMap = new HashMap<>();
     Map<Integer, Long> cmdListMap = new HashMap<>();
-    DelayedCommandWorker delayedCommandWorker = this.new DelayedCommandWorker();
+    ScheduledThreadPoolExecutor scheduledExecutor = new ScheduledThreadPoolExecutor(1);
     boolean doRecovery;
 
     ReplicatingServer(int port, int[] peerPorts, boolean doRecovery) {
@@ -31,31 +33,22 @@ class ReplicatingServer implements Runnable {
 
         messageReceiver = new MessageReceiver(commandQueue, port);
         new Thread(messageReceiver).start();
-        delayedCommandWorker.start();
     }
 
-    class DelayedCommandWorker extends Thread {
-        DelayQueue<Command> delayedCommandQueue = new DelayQueue<>();
+    long getSentCmdListTimeStamp() {
+        return sentCmdListTimeStamp;
+    }
 
-        public void run() {
-            process();
-        }
+    void setSentCmdListTimeStamp(long sentCmdListTimeStamp) {
+        this.sentCmdListTimeStamp = sentCmdListTimeStamp;
+    }
 
-        void addDelayedCommand(Command c) {
-            delayedCommandQueue.add(c);
-        }
+    long getSentVoteTimeStamp() {
+        return sentVoteTimeStamp;
+    }
 
-        void process() {
-            try {
-                while (!stopThread) {
-                    Command c = delayedCommandQueue.take();
-
-                    broadcast(c);
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
+    void setSentVoteTimeStamp(long sentVoteTimeStamp) {
+        this.sentVoteTimeStamp = sentVoteTimeStamp;
     }
 
     void addCommand() {
@@ -80,38 +73,15 @@ class ReplicatingServer implements Runnable {
         sendToPeers(m);
     }
 
+    void sendToHost(Message m, int port) {
+        MessageSender.send(m, port);
+    }
+
     void sendToPeers(Message m) {
         m.setSenderPort(this.port);
         for (int peerPort : peerPorts) {
             MessageSender.send(m, peerPort);
         }
-    }
-
-    Command createVoteCommand(long timeStamp) {
-        VoteCommand vc = new VoteCommand();
-
-        vc.setId(UUID.randomUUID().toString());
-        vc.setVoteTimeStamp(timeStamp);
-
-        return vc;
-    }
-
-    Command createCmdIdListCommand(long endTimeStamp) {
-        CmdIdListCommand cilc = new CmdIdListCommand();
-
-        long startTimeStamp = sentCmdIdListTimeStamp + 1;
-
-        List<Command> cmdList = getAcceptedCommandList(startTimeStamp, endTimeStamp);
-        List<String> cmdIdList = new ArrayList<>();
-        for (Command c : cmdList) {
-            cmdIdList.add(c.getId());
-        }
-
-        cilc.setStartTimeStamp(sentCmdIdListTimeStamp + 1);
-        cilc.setEndTimeStamp(getCurrentTimeStamp() - 2 * bounds.getLinkDelay());
-        cilc.setCmdIdList(cmdIdList);
-
-        return cilc;
     }
 
     List<Command> getAcceptedCommandList(long startTimeStamp, long endTimeStamp) {
@@ -129,18 +99,93 @@ class ReplicatingServer implements Runnable {
         return cmdList;
     }
 
-    void scheduleVote(long timeStamp) {
-        Command vc = createVoteCommand(timeStamp);
+    class DelayedVote implements Runnable {
+        long timeStamp;
 
-        vc.setTimeStamp(timeStamp + 2 * bounds.getLinkDelay());
-        delayedCommandWorker.addDelayedCommand(vc);
+        DelayedVote(long timeStamp) {
+            this.timeStamp = timeStamp;
+        }
+
+        Command createVoteCommand(long timeStamp) {
+            VoteCommand vc = new VoteCommand();
+
+            vc.setId(UUID.randomUUID().toString());
+            vc.setVoteTimeStamp(timeStamp);
+
+            return vc;
+        }
+
+        void sendVote() {
+            Command vc = createVoteCommand(timeStamp);
+
+            broadcast(vc);
+        }
+
+        public void run() {
+            sendVote();
+        }
     }
 
-    void scheduleCommandIdList(long timeStamp) {
-        Command cilc = createCmdIdListCommand(timeStamp);
+    class DelayedCommandList implements Runnable {
+        long timeStamp;
 
-        cilc.setTimeStamp(timeStamp + 2 * bounds.getLinkDelay() + bounds.getBroadcastDelay());
-        delayedCommandWorker.addDelayedCommand(cilc);
+        DelayedCommandList(long timeStamp) {
+            this.timeStamp = timeStamp;
+        }
+
+        Command createCmdListCommand(long endTimeStamp) {
+            CmdListCommand clc = new CmdListCommand();
+
+            long startTimeStamp = getSentCmdListTimeStamp() + 1;
+
+            List<Command> cmdList = getAcceptedCommandList(startTimeStamp, endTimeStamp);
+
+            clc.setStartTimeStamp(startTimeStamp);
+            clc.setEndTimeStamp(endTimeStamp);
+            clc.setCmdList(cmdList);
+
+            return clc;
+        }
+
+        void sendCommandList() {
+            Command cilc = createCmdListCommand(timeStamp);
+
+            broadcast(cilc);
+        }
+
+        public void run() {
+            sendCommandList();
+        }
+    }
+
+    void scheduleDelayedVote(long timeStamp) {
+        DelayedVote dv = this.new DelayedVote(timeStamp);
+
+        long delay = timeStamp + 2 * bounds.getLinkDelay() - getCurrentTimeStamp();
+        delay = delay > 0 ? delay : 0;
+
+        setSentVoteTimeStamp(timeStamp);
+        scheduledExecutor.schedule(dv, delay, TimeUnit.MILLISECONDS);
+    }
+
+
+    void scheduleDelayedCmdList(long timeStamp) {
+        DelayedCommandList dcl = this.new DelayedCommandList(timeStamp);
+
+        long delay = timeStamp + bounds.getVoteTime() + bounds.getBroadcastDelay() - getCurrentTimeStamp();
+        delay = delay > 0 ? delay : 0;
+
+        setSentCmdListTimeStamp(timeStamp);
+        scheduledExecutor.schedule(dcl, delay, TimeUnit.MILLISECONDS);
+    }
+
+    void executeCommands(long endTimeStamp) {
+        List<Command> cmdList = getAcceptedCommandList(executedCmdTimeStamp + 1, endTimeStamp);
+        executedCmdTimeStamp = endTimeStamp;
+
+        for (Command c : cmdList) {
+            System.out.println("Executing " + c);
+        }
     }
 
     void process() {
@@ -167,8 +212,7 @@ class ReplicatingServer implements Runnable {
                     // send replica commands to peers.
                     sendToPeers(rc);
 
-                    scheduleVote(timeStamp);
-                    scheduleCommandIdList(timeStamp);
+                    scheduleDelayedVote(timeStamp);
                 } else if (c.getType().equals("REPLICA_COMMAND")) {
                     ReplicaCommand rc = (ReplicaCommand)c;
                     long timeStamp = rc.getTimeStamp();
@@ -187,8 +231,7 @@ class ReplicatingServer implements Runnable {
                     acceptedCommands.put(ac.getId(), ac);
                     broadcast(ac);
 
-                    scheduleVote(timeStamp);
-                    scheduleCommandIdList(timeStamp);
+                    scheduleDelayedVote(timeStamp);
                 } else if (c.getType().equals("ACCEPT_COMMAND")) {
                     AcceptCommand ac = (AcceptCommand)c;
 
@@ -203,34 +246,41 @@ class ReplicatingServer implements Runnable {
 
                     voteMap.put(port, voteTimeStamp);
 
-                    // find the latest timestamp for which commands are accepted and execute all commands until that.
-                } else if (c.getType().equals("CMDIDLIST_COMMAND")) {
-                    CmdIdListCommand cilc = (CmdIdListCommand)c;
-                    boolean fetchCommands = true;
+                    // servers accepted command list is the knowledge at the best of its ability at time minTimeStamp.
+                    // the correct list is the one obtained by unioning the individual servers command list for some time t.
+                    // if you learnt of a new vote timestamp send your vote.
+                    if (sentVoteTimeStamp < voteTimeStamp) {
+                        scheduleDelayedVote(voteTimeStamp);
+                        scheduleDelayedCmdList(voteTimeStamp);
+                    } else if (sentCmdListTimeStamp < voteTimeStamp) {
+                        scheduleDelayedCmdList(voteTimeStamp);
+                    }
+                } else if (c.getType().equals("CMDLIST_COMMAND")) {
+                    CmdListCommand clc = (CmdListCommand) c;
 
-                    int port = cilc.getSenderPort();
-                    long startTimeStamp = cilc.getStartTimeStamp();
-                    long endTimeStamp = cilc.getEndTimeStamp();
-
-                    // detect if there is a gap in the intervals of knowledge and ask for the commands in between.
-                    if (cmdListMap.get(port) == startTimeStamp-1) {
-                        // make sure you have all the cmdids
-                        for (String cmdId : cilc.getCmdIdList()) {
-                            if (acceptedCommands.get(cmdId) == null) {
-                                break;
-                            }
-                        }
-
-                        fetchCommands = false;
+                    // add the commands into the list. this simulates union of the command lists.
+                    for (Command listCmd : clc.getCmdList()) {
+                        acceptedCommands.put(listCmd.getId(), listCmd);
                     }
 
-                    if (fetchCommands) {
+                    int port = clc.getSenderPort();
+                    long startTimeStamp = clc.getStartTimeStamp();
+                    long endTimeStamp = clc.getEndTimeStamp();
+
+                    // detect if there is a gap in the intervals of knowledge and ask for the commands in between.
+                    // this happens if this server failed for an extended period of time so we need to run a recovery scheme.
+                    if (cmdListMap.get(port) < startTimeStamp - 1) {
                         CmdListRequestCommand clrc = new CmdListRequestCommand();
 
-                        clrc.setStartTimeStamp(acceptedCommandTimeStamp+1); // time of last known update of this.
-                        broadcast(clrc);
+                        clrc.setStartTimeStamp(cmdListMap.get(port) + 1); // time of last known update of this.
+                        // depending on topology this may involve multiple hops, but is a rare condition and does not affect progress.
+                        sendToHost(clrc, port);
                     } else {
-                        acceptedCommandTimeStamp = endTimeStamp;
+                        cmdListMap.put(port, endTimeStamp);
+
+                        if (executedCmdTimeStamp < endTimeStamp) {
+                            executeCommands(endTimeStamp);
+                        }
                     }
                 } else if (c.getType().equals("CMDLISTREQUEST_COMMAND")) {
                     CmdListRequestCommand clrc = (CmdListRequestCommand) c;
@@ -247,12 +297,6 @@ class ReplicatingServer implements Runnable {
                     clc.setEndTimeStamp(endTimeStamp);
 
                     broadcast(clc);
-                } else if (c.getType().equals("CMDLIST_COMMAND")) {
-                    CmdListCommand clc = (CmdListCommand) c;
-
-                    for (Command listCmd : clc.getCmdList()) {
-                        acceptedCommands.put(listCmd.getId(), listCmd);
-                    }
                 } else {
                     System.out.println("Unknown Command " + c);
                 }

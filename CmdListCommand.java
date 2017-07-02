@@ -32,4 +32,8 @@ class CmdListCommand extends Command {
     void setCmdList(List<Command> cmdList) {
         this.cmdList = cmdList;
     }
+
+    public String toString() {
+        return super.toString() + " startTimeStamp - " + startTimeStamp + " endTimeStamp - " + endTimeStamp;
+    }
 }
