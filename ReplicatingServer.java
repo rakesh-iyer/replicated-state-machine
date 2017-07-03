@@ -58,7 +58,7 @@ class ReplicatingServer implements Runnable {
         sc.setTimeStamp(getCurrentTimeStamp());
         sc.setData("Data");
         try {
-            MessageSender.send(sc, port);
+            sendToHost(sc, port);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -127,16 +127,16 @@ class ReplicatingServer implements Runnable {
     }
 
     class DelayedCommandList implements Runnable {
-        long timeStamp;
+        long startTimeStamp;
+        long endTimeStamp;
 
-        DelayedCommandList(long timeStamp) {
-            this.timeStamp = timeStamp;
+        DelayedCommandList(long startTimeStamp, long endTimeStamp) {
+            this.startTimeStamp = startTimeStamp;
+            this.endTimeStamp = endTimeStamp;
         }
 
-        Command createCmdListCommand(long endTimeStamp) {
+        Command createCmdListCommand() {
             CmdListCommand clc = new CmdListCommand();
-
-            long startTimeStamp = getSentCmdListTimeStamp() + 1;
 
             List<Command> cmdList = getAcceptedCommandList(startTimeStamp, endTimeStamp);
 
@@ -148,7 +148,7 @@ class ReplicatingServer implements Runnable {
         }
 
         void sendCommandList() {
-            Command cilc = createCmdListCommand(timeStamp);
+            Command cilc = createCmdListCommand();
 
             broadcast(cilc);
         }
@@ -170,7 +170,7 @@ class ReplicatingServer implements Runnable {
 
 
     void scheduleDelayedCmdList(long timeStamp) {
-        DelayedCommandList dcl = this.new DelayedCommandList(timeStamp);
+        DelayedCommandList dcl = this.new DelayedCommandList(getSentCmdListTimeStamp() + 1, timeStamp);
 
         long delay = timeStamp + bounds.getVoteTime() + bounds.getBroadcastDelay() - getCurrentTimeStamp();
         delay = delay > 0 ? delay : 0;
@@ -179,13 +179,14 @@ class ReplicatingServer implements Runnable {
         scheduledExecutor.schedule(dcl, delay, TimeUnit.MILLISECONDS);
     }
 
-    void executeCommands(long endTimeStamp) {
+    synchronized void executeCommands(long endTimeStamp) {
         List<Command> cmdList = getAcceptedCommandList(executedCmdTimeStamp + 1, endTimeStamp);
-        executedCmdTimeStamp = endTimeStamp;
 
         for (Command c : cmdList) {
             System.out.println("Executing " + c);
         }
+
+        executedCmdTimeStamp = endTimeStamp;
     }
 
     void process() {
@@ -196,10 +197,11 @@ class ReplicatingServer implements Runnable {
                 if (c.getType().equals("START_COMMAND")) {
                     StartCommand sc = (StartCommand)c;
                     long timeStamp = sc.getTimeStamp();
+                    long currentTime= getCurrentTimeStamp();
 
-                    if (timeStamp + bounds.getLinkDelay() < getCurrentTimeStamp()) {
+                    if (timeStamp + bounds.getLinkDelay() < currentTime) {
                         // fail this command. send back response.
-                        System.out.println("Command " + sc + " failed");
+                        System.out.println("Command " + sc + " failed - " + "timeStamp - " + timeStamp + " current timestamp - " +  currentTime);
                         continue;
                     }
 
@@ -216,9 +218,11 @@ class ReplicatingServer implements Runnable {
                 } else if (c.getType().equals("REPLICA_COMMAND")) {
                     ReplicaCommand rc = (ReplicaCommand)c;
                     long timeStamp = rc.getTimeStamp();
+                    long currentTime= getCurrentTimeStamp();
 
-                    if (timeStamp + 2 * bounds.getLinkDelay() < getCurrentTimeStamp()) {
+                    if (timeStamp + 2 * bounds.getLinkDelay() < currentTime) {
                         // fail this command.
+                        System.out.println("Command " + rc + " failed - " + "timeStamp - " + timeStamp + " current timestamp - " +  currentTime);
                         continue;
                     }
 
@@ -251,8 +255,8 @@ class ReplicatingServer implements Runnable {
                     // if you learnt of a new vote timestamp send your vote.
                     if (sentVoteTimeStamp < voteTimeStamp) {
                         scheduleDelayedVote(voteTimeStamp);
-                        scheduleDelayedCmdList(voteTimeStamp);
-                    } else if (sentCmdListTimeStamp < voteTimeStamp) {
+                    }
+                    if (sentCmdListTimeStamp < voteTimeStamp) {
                         scheduleDelayedCmdList(voteTimeStamp);
                     }
                 } else if (c.getType().equals("CMDLIST_COMMAND")) {

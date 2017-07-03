@@ -23,8 +23,9 @@ class RSM {
             rsThread.start();
 
             while (!stopped) {
-                Thread.sleep(10000);
+                Thread.sleep(60000);
                 rs.addCommand();
+                Thread.sleep(1000000);
             }
 
             rsThread.join();
